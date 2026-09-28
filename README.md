@@ -1,6 +1,6 @@
 ﻿<div align="center">
 
-  <img src="https://capsule-render.vercel.app/api?type=rect&color=11131f&height=130&section=header&text=%F0%9F%8E%99%EF%B8%8F%20MIC%20MUTE%20CONTROLLER&fontSize=35&fontColor=7aa2f7&fontAlignY=55" alt="Mic Mute Controller Banner" width="100%" />
+  <img src="https://capsule-render.vercel.app/api?type=rect&color=11131f&height=130&section=header&text=%F0%9F%8E%99%EF%B8%8F%20MIC%20MUTE%20CONTROLLER&fontSize=35&fontColor=7aa2f7&fontAlignY=55" alt="Microphone Control Banner" width="100%" />
 
   <br/>
 
