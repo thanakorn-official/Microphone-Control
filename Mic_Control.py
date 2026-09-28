@@ -609,9 +609,6 @@ class MicControllerApp:
             new_state = 0 if current_state else 1
             self.current_volume_interface.SetMute(new_state, None)
 
-            freq = 400 if new_state == 1 else 900
-            threading.Thread(target=winsound.Beep, args=(freq, 150), daemon=True).start()
-
             self.update_status_display()
             self.show_osd_popup(muted=bool(new_state))
         except Exception:
