@@ -1,0 +1,6 @@
+﻿build/
+dist/
+Output_Installer/
+__pycache__/
+*.spec
+mic_config.json
