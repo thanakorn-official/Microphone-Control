@@ -1,5 +1,4 @@
 ﻿pycaw
-keyboard
 comtypes
 pystray
 pillow

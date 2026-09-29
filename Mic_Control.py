@@ -5,12 +5,11 @@ import json
 import os
 import sys
 import ctypes
+from ctypes import wintypes
 import winreg
 import comtypes
 from comtypes import CLSCTX_ALL
 from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume, EDataFlow, DEVICE_STATE
-import keyboard
-import winsound
 import pystray
 from pystray import MenuItem as item
 from PIL import Image, ImageDraw, ImageTk
@@ -39,19 +38,40 @@ EVENT_NAME = "Local\\MicMuteController_RestoreWindow_Event"
 ERROR_ALREADY_EXISTS = 183
 EVENT_MODIFY_STATE = 0x0002
 
+WM_HOTKEY = 0x0312
+WM_QUIT = 0x0012
+MOD_ALT = 0x0001
+MOD_CONTROL = 0x0002
+MOD_SHIFT = 0x0004
+MOD_WIN = 0x0008
+MOD_NOREPEAT = 0x4000
+HOTKEY_ID = 1
+
+VK_MAP = {
+    "f1": 0x70, "f2": 0x71, "f3": 0x72, "f4": 0x73, "f5": 0x74, "f6": 0x75,
+    "f7": 0x76, "f8": 0x77, "f9": 0x78, "f10": 0x79, "f11": 0x7A, "f12": 0x7B,
+    "space": 0x20, "tab": 0x09, "capslock": 0x14, "pause": 0x13,
+    "insert": 0x2D, "delete": 0x2E, "home": 0x24, "end": 0x23,
+    "prior": 0x21, "next": 0x22, "num_lock": 0x90, "scroll_lock": 0x91,
+    "multiply": 0x6A, "add": 0x6B, "subtract": 0x6D, "divide": 0x6F,
+    "grave": 0xC0, "minus": 0xBD, "equal": 0xBB, "backslash": 0xDC,
+    "bracketleft": 0xDB, "bracketright": 0xDD, "semicolon": 0xBA,
+    "apostrophe": 0xDE, "comma": 0xBC, "period": 0xBE, "slash": 0xBF
+}
+
 DEFAULT_TRANSLATIONS = {
     "th": {
         "lang_name": "ไทย (Thai)",
         "window_title": "Mic Mute Controller",
         "lang_label": "ภาษา:",
-        "mic_label": "ไมโครโฟนที่ใช้งาน (ปัจจุบัน):",
+        "mic_label": "ไมโครโฟนที่ใช้งาน (อัปเดตอัตโนมัติ):",
         "status_checking": "สถานะ: กำลังตรวจสอบ...",
         "status_no_mic": "ไม่พบไมโครโฟนในระบบ",
         "status_muted": "สถานะ: ปิดไมค์ (MUTED)",
         "status_active": "สถานะ: เปิดไมค์ (ACTIVE)",
         "hk_frame": " ตั้งค่าปุ่มคีย์ลัด (Hotkey) ",
         "hk_btn_normal": "ปุ่มปัจจุบัน: [ {hotkey} ]  (คลิกเพื่อเปลี่ยน)",
-        "hk_btn_record": "กำลังรอรับปุ่ม... กดปุ่มได้เลย (Esc = ยกเลิก)",
+        "hk_btn_record": "กำลังรอรับปุ่ม... กดปุ่มในหน้าต่างนี้ได้เลย (Esc = ยกเลิก)",
         "toggle_btn": "สลับ เปิด / ปิด ไมค์",
         "osd_chk": "แสดงหน้าต่างลอยแจ้งเตือนด้านล่างจอ (Floating OSD)",
         "close_to_tray_chk": "พับเก็บลง System Tray เมื่อกดปุ่มปิด (X)",
@@ -65,18 +85,18 @@ DEFAULT_TRANSLATIONS = {
         "tray_muted_prefix": "[ปิดไมค์]",
         "tray_active_prefix": "[เปิดไมค์]"
     },
-"en": {
+    "en": {
         "lang_name": "English",
         "window_title": "Mic Mute Controller",
         "lang_label": "Language:",
-        "mic_label": "Microphone (Current):",
+        "mic_label": "Microphone (Auto-Update):",
         "status_checking": "Status: Checking...",
         "status_no_mic": "No Microphone Detected",
         "status_muted": "Status: Mic Muted (MUTED)",
         "status_active": "Status: Mic Active (ACTIVE)",
         "hk_frame": " Hotkey Settings ",
         "hk_btn_normal": "Current Key: [ {hotkey} ]  (Click to change)",
-        "hk_btn_record": "Listening... Press any key (Esc = Cancel)",
+        "hk_btn_record": "Listening... Press key combination now (Esc = Cancel)",
         "toggle_btn": "Toggle Mic Mute / Unmute",
         "osd_chk": "Show bottom floating overlay (Floating OSD)",
         "close_to_tray_chk": "Minimize to System Tray when clicking Close (X)",
@@ -91,6 +111,7 @@ DEFAULT_TRANSLATIONS = {
         "tray_active_prefix": "[ACTIVE]"
     }
 }
+
 
 class CustomTrayIcon(pystray.Icon):
     def __init__(self, *args, on_left_click=None, **kwargs):
@@ -120,8 +141,9 @@ class MicControllerApp:
         self.current_lang = "th"
         self.translations = {}
         self.lang_codes = []
-        self.hotkey_hook = None
+        self.hotkey_thread_id = None
         self.is_recording = False
+        self.pressed_mods = set()
         self.is_running = True
         self.osd_hide_timer = None
 
@@ -608,37 +630,70 @@ class MicControllerApp:
             current_state = self.current_volume_interface.GetMute()
             new_state = 0 if current_state else 1
             self.current_volume_interface.SetMute(new_state, None)
-
             self.update_status_display()
             self.show_osd_popup(muted=bool(new_state))
         except Exception:
             self.refresh_microphones()
 
     # --- Hotkey Management ---
+    def parse_hotkey_string(self, hotkey_str):
+        parts = [p.strip().lower() for p in hotkey_str.split("+") if p.strip()]
+        mods = MOD_NOREPEAT
+        vk = 0
+        for p in parts:
+            if p in ("ctrl", "control"):
+                mods |= MOD_CONTROL
+            elif p in ("alt", "menu"):
+                mods |= MOD_ALT
+            elif p == "shift":
+                mods |= MOD_SHIFT
+            elif p in ("win", "windows"):
+                mods |= MOD_WIN
+            elif p in VK_MAP:
+                vk = VK_MAP[p]
+            elif len(p) == 1 and p.isalnum():
+                vk = ord(p.upper())
+        return mods, vk
+
     def clear_hotkey(self):
-        if self.hotkey_hook is not None:
+        if self.hotkey_thread_id is not None:
             try:
-                keyboard.remove_hotkey(self.hotkey_hook)
+                ctypes.windll.user32.PostThreadMessageW(self.hotkey_thread_id, WM_QUIT, 0, 0)
             except Exception:
                 pass
-            self.hotkey_hook = None
-        try:
-            keyboard.unhook_all_hotkeys()
-        except Exception:
-            pass
+            self.hotkey_thread_id = None
 
     def register_hotkey(self, hotkey_str):
         self.clear_hotkey()
+        mods, vk = self.parse_hotkey_string(hotkey_str)
+        if vk == 0:
+            return
+        threading.Thread(target=self._hotkey_listener_loop, args=(mods, vk), daemon=True).start()
+
+    def _hotkey_listener_loop(self, mods, vk):
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        self.hotkey_thread_id = kernel32.GetCurrentThreadId()
+
+        if not user32.RegisterHotKey(None, HOTKEY_ID, mods, vk):
+            return
+
+        msg = wintypes.MSG()
         try:
-            self.hotkey_hook = keyboard.add_hotkey(hotkey_str, self.toggle_mute)
-        except Exception:
-            pass
+            while self.is_running and user32.GetMessageW(ctypes.byref(msg), None, 0, 0) != 0:
+                if msg.message == WM_HOTKEY and msg.wParam == HOTKEY_ID:
+                    self.toggle_mute()
+                elif msg.message == WM_QUIT:
+                    break
+        finally:
+            user32.UnregisterHotKey(None, HOTKEY_ID)
 
     def start_recording_hotkey(self):
         if self.is_recording:
             return
 
         self.is_recording = True
+        self.pressed_mods.clear()
         self.clear_hotkey()
 
         self.hotkey_btn.config(
@@ -647,19 +702,63 @@ class MicControllerApp:
             fg="#856404"
         )
 
-        threading.Thread(target=self._record_hotkey_thread, daemon=True).start()
+        self.root.bind("<KeyPress>", self._on_tk_key_press)
+        self.root.bind("<KeyRelease>", self._on_tk_key_release)
+        self.root.focus_force()
 
-    def _record_hotkey_thread(self):
-        try:
-            new_hk = keyboard.read_hotkey(suppress=False)
-            self.root.after(0, self.finish_recording_hotkey, new_hk)
-        except Exception:
-            self.root.after(0, self.finish_recording_hotkey, None)
+    def _on_tk_key_press(self, event):
+        if not self.is_recording:
+            return
+
+        keysym = event.keysym.lower()
+        if keysym == "escape":
+            self.finish_recording_hotkey(None)
+            return
+
+        if keysym in ("control_l", "control_r"):
+            self.pressed_mods.add("ctrl")
+            return
+        elif keysym in ("alt_l", "alt_r"):
+            self.pressed_mods.add("alt")
+            return
+        elif keysym in ("shift_l", "shift_r"):
+            self.pressed_mods.add("shift")
+            return
+        elif keysym in ("win_l", "win_r", "super_l", "super_r"):
+            self.pressed_mods.add("win")
+            return
+
+        key_name = None
+        if keysym in VK_MAP:
+            key_name = keysym
+        elif len(keysym) == 1 and keysym.isalnum():
+            key_name = keysym
+
+        if key_name:
+            ordered_mods = [m for m in ("ctrl", "alt", "shift", "win") if m in self.pressed_mods]
+            ordered_mods.append(key_name)
+            new_hk = "+".join(ordered_mods)
+            self.finish_recording_hotkey(new_hk)
+
+    def _on_tk_key_release(self, event):
+        if not self.is_recording:
+            return
+        keysym = event.keysym.lower()
+        if keysym in ("control_l", "control_r"):
+            self.pressed_mods.discard("ctrl")
+        elif keysym in ("alt_l", "alt_r"):
+            self.pressed_mods.discard("alt")
+        elif keysym in ("shift_l", "shift_r"):
+            self.pressed_mods.discard("shift")
+        elif keysym in ("win_l", "win_r", "super_l", "super_r"):
+            self.pressed_mods.discard("win")
 
     def finish_recording_hotkey(self, new_hk):
         self.is_recording = False
+        self.root.unbind("<KeyPress>")
+        self.root.unbind("<KeyRelease>")
 
-        if new_hk and new_hk.lower() != "esc":
+        if new_hk:
             self.current_hotkey = new_hk.lower()
             self.save_config()
 
