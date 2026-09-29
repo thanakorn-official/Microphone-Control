@@ -14,11 +14,11 @@ VSVersionInfo(
       [
       StringTable(
         u'040904B0',
-        [StringStruct(u'CompanyName', u'GZero Open Source'),
+        [StringStruct(u'CompanyName', u'Espresso Open Source'),
         StringStruct(u'FileDescription', u'Microphone Mute Controller Utility'),
         StringStruct(u'FileVersion', u'1.0.0.0'),
         StringStruct(u'InternalName', u'Mic_Control'),
-        StringStruct(u'LegalCopyright', u'Copyright (c) 2026 GZero. MIT License.'),
+        StringStruct(u'LegalCopyright', u'Copyright (c) 2026 Espresso. MIT License.'),
         StringStruct(u'OriginalFilename', u'Mic_Control.exe'),
         StringStruct(u'ProductName', u'Mic Mute Controller'),
         StringStruct(u'ProductVersion', u'1.0.0.0')])

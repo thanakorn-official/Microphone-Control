@@ -124,7 +124,6 @@ class CustomTrayIcon(pystray.Icon):
 
 
 class MicControllerApp:
-    # --- Initialization & Instance Listener ---
     def __init__(self, root, mutex_handle=None):
         self.root = root
         self.mutex_handle = mutex_handle
@@ -161,7 +160,11 @@ class MicControllerApp:
         self.load_languages()
         self.load_config()
 
-        comtypes.CoInitialize()
+        try:
+            comtypes.CoInitialize()
+        except Exception:
+            pass
+
         self.setup_ui()
         self.setup_osd_window()
         self.setup_tray()
@@ -184,7 +187,6 @@ class MicControllerApp:
             if res == 0:
                 self.show_window()
 
-    # --- Configuration & Language Management ---
     def load_config(self):
         if os.path.exists(CONFIG_FILE):
             try:
@@ -300,7 +302,6 @@ class MicControllerApp:
         fallback = DEFAULT_TRANSLATIONS.get(self.current_lang, DEFAULT_TRANSLATIONS["th"])
         return fallback.get(key, DEFAULT_TRANSLATIONS["th"].get(key, key))
 
-    # --- UI & Visuals Setup ---
     def create_mic_icon(self, muted=False, no_mic=False, size=64):
         scale = 4
         canvas_size = size * scale
@@ -446,7 +447,6 @@ class MicControllerApp:
         )
         self.startup_chk.pack(anchor="w")
 
-    # --- Floating OSD Overlay ---
     def setup_osd_window(self):
         self.osd_win = tk.Toplevel(self.root)
         self.osd_win.withdraw()
@@ -547,7 +547,6 @@ class MicControllerApp:
         if not self.show_osd and hasattr(self, 'osd_win'):
             self.osd_win.withdraw()
 
-    # --- Microphone & Audio Control ---
     def refresh_microphones(self):
         if not self.is_running:
             return
@@ -592,11 +591,34 @@ class MicControllerApp:
 
     def bind_mic_interface(self, idx):
         if 0 <= idx < len(self.devices):
-            dev = self.devices[idx]
-            self.selected_mic_name = self.device_names[idx]
-            interface = dev.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-            self.current_volume_interface = comtypes.cast(interface, comtypes.POINTER(IAudioEndpointVolume))
-            self.update_status_display()
+            try:
+                dev = self.devices[idx]
+                self.selected_mic_name = self.device_names[idx]
+                interface = dev.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+                self.current_volume_interface = comtypes.cast(interface, comtypes.POINTER(IAudioEndpointVolume))
+                self.update_status_display()
+            except Exception:
+                self.current_volume_interface = None
+
+    def update_tray_visuals(self, muted=False, no_mic=False):
+        if not hasattr(self, 'tray_icon') or not self.tray_icon:
+            return
+        try:
+            if no_mic:
+                self.tray_icon.icon = self.icon_nomic
+                self.tray_icon.title = self.t("tray_no_mic")
+            elif muted:
+                self.tray_icon.icon = self.icon_muted
+                self.root.iconphoto(False, self.tk_icon_muted)
+                tooltip = f"{self.t('tray_muted_prefix')} {self.selected_mic_name}"
+                self.tray_icon.title = tooltip[:120]
+            else:
+                self.tray_icon.icon = self.icon_active
+                self.root.iconphoto(False, self.tk_icon_active)
+                tooltip = f"{self.t('tray_active_prefix')} {self.selected_mic_name}"
+                self.tray_icon.title = tooltip[:120]
+        except Exception:
+            pass
 
     def update_status_display(self):
         if not self.current_volume_interface:
@@ -624,8 +646,18 @@ class MicControllerApp:
         self.root.after(0, self._execute_toggle_mute)
 
     def _execute_toggle_mute(self):
-        if self.is_recording or not self.current_volume_interface:
+        if self.is_recording:
             return
+
+        # ตรวจสอบและผูก Interface ใหม่หากหลุด
+        if not self.current_volume_interface and self.devices:
+            idx = self.mic_combo.current()
+            if idx >= 0:
+                self.bind_mic_interface(idx)
+
+        if not self.current_volume_interface:
+            return
+
         try:
             current_state = self.current_volume_interface.GetMute()
             new_state = 0 if current_state else 1
@@ -635,7 +667,6 @@ class MicControllerApp:
         except Exception:
             self.refresh_microphones()
 
-    # --- Hotkey Management ---
     def parse_hotkey_string(self, hotkey_str):
         parts = [p.strip().lower() for p in hotkey_str.split("+") if p.strip()]
         mods = MOD_NOREPEAT
@@ -680,9 +711,10 @@ class MicControllerApp:
 
         msg = wintypes.MSG()
         try:
-            while self.is_running and user32.GetMessageW(ctypes.byref(msg), None, 0, 0) != 0:
+            while self.is_running and user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
                 if msg.message == WM_HOTKEY and msg.wParam == HOTKEY_ID:
-                    self.toggle_mute()
+                    # ส่งคำสั่งกลับไปยัง Tkinter Main Thread ทันที
+                    self.root.after(0, self._execute_toggle_mute)
                 elif msg.message == WM_QUIT:
                     break
         finally:
@@ -769,7 +801,6 @@ class MicControllerApp:
             fg="black"
         )
 
-    # --- System Tray & Windows Startup ---
     def build_tray_menu(self):
         return pystray.Menu(
             item(self.t("tray_open"), self.show_window),
@@ -786,26 +817,6 @@ class MicControllerApp:
             on_left_click=self.toggle_mute
         )
         threading.Thread(target=self.tray_icon.run, daemon=True).start()
-
-    def update_tray_visuals(self, muted=False, no_mic=False):
-        if not hasattr(self, 'tray_icon') or not self.tray_icon:
-            return
-        try:
-            if no_mic:
-                self.tray_icon.icon = self.icon_nomic
-                self.tray_icon.title = self.t("tray_no_mic")
-            elif muted:
-                self.tray_icon.icon = self.icon_muted
-                self.root.iconphoto(False, self.tk_icon_muted)
-                tooltip = f"{self.t('tray_muted_prefix')} {self.selected_mic_name}"
-                self.tray_icon.title = tooltip[:120]
-            else:
-                self.tray_icon.icon = self.icon_active
-                self.root.iconphoto(False, self.tk_icon_active)
-                tooltip = f"{self.t('tray_active_prefix')} {self.selected_mic_name}"
-                self.tray_icon.title = tooltip[:120]
-        except Exception:
-            pass
 
     def check_startup_status(self):
         try:
@@ -837,7 +848,6 @@ class MicControllerApp:
         except Exception:
             pass
 
-    # --- Window Lifecycle & Exit ---
     def on_close_to_tray_changed(self):
         self.close_to_tray = self.close_to_tray_var.get()
         self.save_config()
@@ -883,7 +893,6 @@ class MicControllerApp:
         self.root.after(0, self.root.destroy)
 
 
-# --- Application Entry Point ---
 if __name__ == "__main__":
     kernel32 = ctypes.windll.kernel32
     mutex = kernel32.CreateMutexW(None, False, MUTEX_NAME)
